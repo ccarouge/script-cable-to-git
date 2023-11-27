@@ -1,0 +1,118 @@
+#!/bin/bash
+# This script contains the steps needed to transfer CABLE repository from SVN to git and GitHub. Note some of the steps have to be done manually so do not run automatically on PBS. Most steps can be done interactively, only the clone is better done under copyq. For CABLE, the clone takes about 20-25 min.
+
+
+#PBS -l wd
+#PBS -l ncpus=1
+#PBS -l mem=2GB
+#PBS -l walltime=0:25:00
+#PBS -q copyq
+#PBS -j oe
+#PBS -m e
+#PBS -l storage=gdata/tm70
+
+svn_src_name=cable_src_2
+git_src_name=cable-git
+new_src_remote=svn_src
+
+# Copy all the branches we want to a single location in SVN
+#svn copy --parents https://trac.nci.org.au/svn/cable/branches/Users/inh599/BLAZE_9184 https://trac.nci.org.au/svn/cable/branches/Share/ccc561/BLAZE_9184 -m "Copy for moving to git"
+#svn copy --parents https://trac.nci.org.au/svn/cable/branches/Share/CABLE-POP_TRENDY https://trac.nci.org.au/svn/cable/branches/Share/ccc561/CABLE-POP_TRENDY -m "Copy for moving to git"
+#svn copy --parents https://trac.nci.org.au/svn/cable/branches/Users/ms8355/CableHydraulics https://trac.nci.org.au/svn/cable/branches/Share/ccc561/CABLEHydraulics -m "Copy for moving to git"
+#svn copy --parents https://trac.nci.org.au/svn/cable/branches/Users/ccc561/calendar_fix https://trac.nci.org.au/svn/cable/branches/Share/ccc561/calendar_fix -m "Copy for moving to git"
+#svn copy --parents https://trac.nci.org.au/svn/cable/branches/Users/rk4417/DevBr-1 https://trac.nci.org.au/svn/cable/branches/Share/ccc561/DevBr-1 -m "Copy for moving to git"
+#svn copy --parents https://trac.nci.org.au/svn/cable/branches/Users/rk4417/DevBr-2 https://trac.nci.org.au/svn/cable/branches/Share/ccc561/DevBr-2 -m "Copy for moving to git"
+#svn copy --parents https://trac.nci.org.au/svn/cable/branches/Users/mm3972/Marks_latest_branch_with_fixes_mmy_trunk https://trac.nci.org.au/svn/cable/branches/Share/ccc561/Marks_latest_branch_with_fixes_mmy_trunk -m "Copy for moving to git"
+#svn copy --parents https://trac.nci.org.au/svn/cable/branches/Share/NESP2pt9_BLAZE https://trac.nci.org.au/svn/cable/branches/Share/ccc561/NESP2pt9_BLAZE -m "Copy for moving to git"
+#svn copy --parents https://trac.nci.org.au/svn/cable/branches/Share/NESP2pt9_CROP https://trac.nci.org.au/svn/cable/branches/Share/ccc561/NESP2pt9_CROP -m "Copy for moving to git"
+#svn copy --parents https://trac.nci.org.au/svn/cable/branches/Users/inh599/Ticket334 https://trac.nci.org.au/svn/cable/branches/Share/ccc561/Ticket334 -m "Copy for moving to git"
+#svn copy --parents https://trac.nci.org.au/svn/cable/branches/Users/inh599/Ticket337 https://trac.nci.org.au/svn/cable/branches/Share/ccc561/Ticket337 -m "Copy for moving to git"
+#svn copy --parents https://trac.nci.org.au/svn/cable/branches/Users/inh599/Ticket339 https://trac.nci.org.au/svn/cable/branches/Share/ccc561/Ticket339 -m "Copy for moving to git"
+#svn copy --parents https://trac.nci.org.au/svn/cable/tags/CABLE-2.4-ACCESS-ESM1.5 https://trac.nci.org.au/svn/cable/branches/Share/ccc561/CABLE-2.4-ACCESS-ESM1.5 -m "Copy for moving to git"
+#svn copy --parents https://trac.nci.org.au/svn/cable/tags/CABLE-2.5-ACCESS-CM2 https://trac.nci.org.au/svn/cable/branches/Share/ccc561/CABLE-2.#5-ACCESS-CM2 -m "Copy for moving to git"
+#
+
+git svn clone https://trac.nci.org.au/svn/cable -T trunk -b branches/Share/ccc561/ ${svn_src_name}
+
+# Clean up the cable repository:
+# - create the local branches as needed
+# - reset all to HEAD^1 so there isn't the recent copy commit
+
+# List of all the branches we want. `sed` removes the trailing `/`.
+branches=`svn ls https://trac.nci.org.au/svn/cable/branches/Share/ccc561/ | sed 's/.$//' `
+
+cd ${svn_src_name}
+for br in ${branches}
+do
+   echo removing last commit from ${br}
+   git checkout -b ${br} origin/${br}
+   git reset --hard HEAD^1
+   echo
+done
+cd ..
+
+# Filter the large files out
+git clone git@github.com:newren/git-filter-repo.git
+module load conda
+cd ${svn_src_name}
+python ../git-filter-repo/git_filter_repo.py --analyze
+cd ../
+sort -n -r ${svn_src_name}/.git/filter-repo/analysis/path-all-sizes.txt > ${svn_src_name}-large-files.txt
+
+# Manual step to clean the file!!!
+
+# Sorted list of paths:
+cut -c36- ${svn_src_name}-large-files.txt | sort > ${svn_src_name}-large-files.sorted.txt
+
+# Remove the origin remote otherwise the git-filter-repo tool creates local branches for everything. Clone the repo to another local to remove all mentions of the SVN remote.
+new_cable_name=new_cable_src
+git clone ${svn_src_name} ${new_cable_name}
+for br in ${branches}
+do
+    echo Create local branch for ${br}
+    git checkout ${br}
+done
+python ../git-filter-repo/git_filter_repo.py --force --invert-paths --path offline/.GSWP2.log_cable 2>&1 >> ../${new_cable_name}-filter-repo.log
+git checkout main
+
+# Try pushing the result to a test repo on GitHub to ensure it is accepted.
+git remote add origin https://github.com/ccarouge/CABLEtest.git
+for branch in $branches
+do
+    git checkout $branch
+    git push -u origin $branch
+done
+cd ..
+
+# Merge within existing CABLE repo
+
+# Clone the GitHub CABLE repo
+git clone git@github.com:CABLE-LSM/CABLE.git ${git_src_name}
+
+# Add the SVN-based source as a remote
+cd ${git_src_name}
+git remote add ${new_src_remote} ../${new_cable_name}
+git fetch ${new_src_remote}
+
+# Create local branches for each of the remote branches we want to keep
+for br in ${branches}
+do
+    git checkout -b ${br} ${new_src_remote}/${br}
+done
+
+# Get a new branch to merge the 2 main branches together
+git checkout 177-bring-the-cable-source-code-from-svn
+
+
+# STEP TO DO MANUALLY!
+# Merge the src_remote/main into the "doc" repo
+git merge -s recursive -Xsubtree=src --allow-unrelated-histories ${new_src_remote}/main
+
+# Push all the new local branches to the remote
+for br in ${branches}
+do
+    git push -u origin ${br}
+done
+git push origin 177-bring-the-cable-source-code-from-svn
+
+# Open a pull request for the merged main branch and merge into `main`
